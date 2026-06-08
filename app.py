@@ -130,4 +130,86 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                             ws[f"B{linha_atual}"] = row["DESCRICAO"]
                             ws[f"C{linha_atual}"] = row["FABRICACAO"]
                             ws[f"D{linha_atual}"] = row["VALIDADE"]
-                            ws
+                            ws[f"H{linha_atual}"] = row["QUANTIDADE"]
+                            
+                            ws[f"E{linha_atual}"] = f"=D{linha_atual}-TODAY()"
+                            ws[f"F{linha_atual}"] = f"=D{linha_atual}-C{linha_atual}"
+                            ws[f"G{linha_atual}"] = f"=E{linha_atual}/F{linha_atual}"
+                        
+                        buffer = io.BytesIO()
+                        wb.save(buffer)
+                        buffer.seek(0)
+                        
+                        st.session_state.bd_nuvem_cargas.loc[st.session_state.bd_nuvem_cargas["ID_CARGA"].astype(str) == id_sel, "STATUS"] = "FINALIZADO"
+                        
+                        st.success("🎉 Planilha gerada com sucesso!")
+                        st.download_button(
+                            label="📥 Baixar Planilha de Controle Pronta",
+                            data=buffer,
+                            file_name=f"CONTROLE_SHELF_{escolha_carga.replace(' ', '_')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                    except Exception as e:
+                        st.error(f"Erro ao gerar arquivo: {e}")
+
+# ----------------- 2. TELA DO CONFERENTE (CELULAR) -----------------
+else:
+    st.title("📱 Conferência de Entrada - Doca")
+    
+    df_cargas = st.session_state.bd_nuvem_cargas
+    cargas_disponiveis = df_cargas[df_cargas["STATUS"] == "EM CONFERENCIA"] if not df_cargas.empty else pd.DataFrame()
+    
+    if cargas_disponiveis.empty:
+        st.success("✅ Nenhuma carga pendente de conferência na doca!")
+    else:
+        carga_selecionada = st.selectbox("Selecione a Carga para conferir:", cargas_disponiveis["NOME_CARGA"].unique())
+        row_c = cargas_disponiveis[cargas_disponiveis["NOME_CARGA"] == carga_selecionada].iloc[0]
+        id_carga_ativa = str(row_c["ID_CARGA"])
+        
+        df_produtos_carga = pd.read_json(io.StringIO(row_c["CONTEUDO_CSV"]))
+        
+        st.markdown("---")
+        conferente = st.text_input("Nome do Conferente:")
+        codigo_bipado = st.text_input("Digite ou Bipe o Código do Produto:").strip().lstrip('0')
+        
+        if codigo_bipado:
+            df_produtos_carga["Codigo_Prod"] = df_produtos_carga["Codigo_Prod"].astype(str)
+            item = df_produtos_carga[df_produtos_carga["Codigo_Prod"] == codigo_bipado]
+            
+            if not item.empty:
+                desc_item = item.iloc[0]["Descricao_Prod"]
+                st.info(f"📦 **Item:** {desc_item}")
+                
+                with st.form(key="form_celular", clear_on_submit=True):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        f_fab = st.date_input("Data de Fabricação", value=datetime.today())
+                    with col2:
+                        f_ven = st.date_input("Data de Vencimento", value=datetime.today())
+                    
+                    f_qtd = st.number_input("Quantidade:", min_value=1, step=1)
+                    btn_enviar = st.form_submit_button("🚀 Enviar Lote para o Supervisor")
+                    
+                    if btn_enviar:
+                        if conferente:
+                            novo_lote = pd.DataFrame([{
+                                "ID_CARGA": id_carga_ativa,
+                                "CODIGO": codigo_bipado,
+                                "DESCRICAO": desc_item,
+                                "FABRICACAO": f_fab.strftime('%d/%m/%Y'),
+                                "VALIDADE": f_ven.strftime('%d/%m/%Y'),
+                                "QUANTIDADE": f_qtd,
+                                "CONFERENTE": conferente
+                            }])
+                            st.session_state.bd_nuvem_itens = pd.concat([st.session_state.bd_nuvem_itens, novo_lote], ignore_index=True)
+                            st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
+                        else:
+                            st.error("⚠️ Preencha seu nome antes de enviar.")
+            else:
+                st.error("❌ Código de produto não encontrado nesta carga.")
+        
+        st.markdown("---")
+        st.subheader("📋 Meus Itens Enviados")
+        meus_itens = st.session_state.bd_nuvem_itens[st.session_state.bd_nuvem_itens["ID_CARGA"] == id_carga_ativa]
+        if not meus_itens.empty:
+            st.dataframe(meus_itens[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE"]])
