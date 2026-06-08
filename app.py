@@ -16,10 +16,6 @@ if "bd_global_itens" not in st.session_state.__class__.__dict__:
 if "modelos_excel_memoria" not in st.session_state.__class__.__dict__:
     st.session_state.__class__.modelos_excel_memoria = {}
 
-# Atalhos para facilitar a leitura no restante do código
-if "bd_nuvem_cargas" not in st.session_state:
-    st.session_state.bd_nuvem_cargas = pd.DataFrame(columns=["ID_CARGA", "NOME_CARGA", "CONTEUDO_CSV", "STATUS"])
-
 # ----------------- INTERFACE SHIFT (MENU LATERAL) -----------------
 st.sidebar.title("🎮 Controle de Acesso")
 perfil = st.sidebar.radio("Selecione o seu Perfil:", ["🖥️ Painel do Supervisor (PC)", "📱 Conferência na Doca (Celular)"])
@@ -56,20 +52,20 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                     for linha in linhas_texto:
                         if not linha.strip():
                             continue
-                        linha_limpa = linha.replace('"', '').replace('-[-[-[-[-[-[-[-[', '').replace('\t', ' ').strip()
+                        linha_limpa = line_clean = linha.replace('"', '').replace('-[-[-[-[-[-[-[-[', '').replace('\t', ' ').strip()
                         match = re.search(r'(\d{4,8})\s*-\s*([^,]+)', linha_limpa)
                         
                         if match:
                             codigo = match.group(1).strip().lstrip('0')
                             descricao = match.group(2).strip()
                             if not any(t in descricao.upper() for t in ["TOTAL", "EMISSÃO", "PÁGINA", "RELATÓRIO", "CLIENTE", "MOTORISTA"]):
-                                .append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
+                                linhas_produtos.append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
                     
                     if len(linhas_produtos) > 0:
                         df_produtos = pd.DataFrame(linhas_produtos).drop_duplicates(subset=['Codigo_Prod'])
                         id_carga = str(int(datetime.now().timestamp()))
                         
-                        # Injeta no banco global compartilhado
+                        # Injeta no banco global compartilhado do servidor
                         nova_carga = pd.DataFrame([{"ID_CARGA": id_carga, "NOME_CARGA": nome_carga, "CONTEUDO_CSV": df_produtos.to_json(orient="records"), "STATUS": "EM CONFERENCIA"}])
                         st.session_state.__class__.bd_global_cargas = pd.concat([st.session_state.__class__.bd_global_cargas, nova_carga], ignore_index=True)
                         
@@ -145,14 +141,15 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
 else:
     st.title("📱 Conferência de Entrada - Doca")
     
-    df_cargas = st.sidebar.button("🔄 Atualizar Lista de Cargas") if st.sidebar.button else True
+    # Menu rápido de atualização no topo da tela do celular
+    if st.button("🔄 Atualizar Lista de Cargas"):
+        st.rerun()
+        
     df_cargas = st.session_state.__class__.bd_global_cargas
     cargas_disponiveis = df_cargas[df_cargas["STATUS"] == "EM CONFERENCIA"] if not df_cargas.empty else pd.DataFrame()
     
     if cargas_disponiveis.empty:
         st.success("✅ Nenhuma carga pendente de conferência na doca!")
-        if st.button("🔄 Buscar Novas Cargas"):
-            st.rerun()
     else:
         carga_selecionada = st.selectbox("Selecione a Carga para conferir:", cargas_disponiveis["NOME_CARGA"].unique())
         row_c = cargas_disponiveis[cargas_disponiveis["NOME_CARGA"] == carga_selecionada].iloc[0]
