@@ -113,4 +113,102 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                             # Monta o arquivo oficial de saída injetando as fórmulas nas células corretas
                             modelo_bytes = st.session_state.get(f"modelo_{id_sel}")
                             wb = openpyxl.load_workbook(io.BytesIO(modelo_bytes))
-                            aba_
+                            aba_nome = "SHELF" if "SHELF" in wb.sheetnames else wb.sheetnames[0]
+                            ws = wb[aba_nome]
+                            
+                            linha_inicio = 5
+                            for index, row in df_bipado.reset_index().iterrows():
+                                linha_atual = linha_inicio + index
+                                ws[f"A{linha_atual}"] = int(row["CODIGO"]) if str(row["CODIGO"]).isdigit() else row["CODIGO"]
+                                ws[f"B{linha_atual}"] = row["DESCRICAO"]
+                                ws[f"C{linha_atual}"] = row["FABRICACAO"]
+                                ws[f"D{linha_atual}"] = row["VALIDADE"]
+                                ws[f"H{linha_atual}"] = row["QUANTIDADE"]
+                                
+                                ws[f"E{linha_atual}"] = f"=D{linha_atual}-TODAY()"
+                                ws[f"F{linha_atual}"] = f"=D{linha_atual}-C{linha_atual}"
+                                ws[f"G{linha_atual}"] = f"=E{linha_atual}/F{linha_atual}"
+                            
+                            buffer = io.BytesIO()
+                            wb.save(buffer)
+                            buffer.seek(0)
+                            
+                            # Finaliza o status da carga para que ela suma da fila de bipes do celular
+                            st.session_state.bd_simulado_cargas.loc[st.session_state.bd_simulado_cargas["ID_CARGA"] == id_sel, "STATUS"] = "FINALIZADO"
+                            
+                            st.success("🎉 Planilha oficial montada com sucesso!")
+                            st.download_button(
+                                label="📥 Baixar Planilha de Controle Pronta",
+                                data=buffer,
+                                file_name=f"CONTROLE_SHELF_{escolha_carga.replace(' ', '_')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                        except Exception as e:
+                            st.error(f"Erro ao gerar arquivo: {e}")
+
+# ----------------- 2. TELA DO CONFERENTE (CELULAR) -----------------
+else:
+    st.title("📱 Conferência de Entrada - Doca")
+    st.write("Selecione a carga ativa, digite/bipe o código do produto e insira as informações.")
+    
+    if st.session_state.bd_simulado_cargas.empty:
+        st.warning("⚠️ Nenhuma carga foi criada pelo supervisor no momento. Aguarde a liberação no PC.")
+    else:
+        cargas_disponiveis = st.session_state.bd_simulado_cargas[st.session_state.bd_simulado_cargas["STATUS"] == "EM CONFERENCIA"]
+        
+        if cargas_disponiveis.empty:
+            st.success("✅ Excelente! Nenhuma carga pendente de conferência na doca.")
+        else:
+            carga_selecionada = st.selectbox("Selecione a Carga para conferir:", cargas_disponiveis["NOME_CARGA"].unique())
+            row_c = cargas_disponiveis[cargas_disponiveis["NOME_CARGA"] == carga_selecionada].iloc[0]
+            id_carga_ativa = row_c["ID_CARGA"]
+            
+            # Reconstrói os dados autorizados da carga convertendo o JSON
+            df_produtos_carga = pd.read_json(io.StringIO(row_c["CONTEUDO_CSV"]))
+            
+            st.markdown("---")
+            conferente = st.text_input("Nome do Conferente (Quem está bipando):", key="nome_conf")
+            codigo_bipado = st.text_input("Digite ou Bipe o Código do Produto:", key="code_bip").strip().lstrip('0')
+            
+            if codigo_bipado:
+                df_produtos_carga["Codigo_Prod"] = df_produtos_carga["Codigo_Prod"].astype(str)
+                item = df_produtos_carga[df_produtos_carga["Codigo_Prod"] == codigo_bipado]
+                
+                if not item.empty:
+                    desc_item = item.iloc[0]["Descricao_Prod"]
+                    st.info(f"📦 **Item Identificado:** {desc_item}")
+                    
+                    with st.form(key="form_celular", clear_on_submit=True):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            f_fab = st.date_input("Data de Fabricação", value=datetime.today())
+                        with col2:
+                            f_ven = st.date_input("Data de Vencimento", value=datetime.today())
+                        
+                        f_qtd = st.number_input("Quantidade de Caixas/Unidades:", min_value=1, step=1)
+                        btn_enviar = st.form_submit_button("🚀 Enviar Lote para o Supervisor")
+                        
+                        if btn_enviar:
+                            if conferente:
+                                novo_lote = pd.DataFrame([{
+                                    "ID_CARGA": id_carga_ativa,
+                                    "CODIGO": codigo_bipado,
+                                    "DESCRICAO": desc_item,
+                                    "FABRICACAO": f_fab.strftime('%d/%m/%Y'),
+                                    "VALIDADE": f_ven.strftime('%d/%m/%Y'),
+                                    "QUANTIDADE": f_qtd,
+                                    "CONFERENTE": conferente
+                                }])
+                                
+                                st.session_state.bd_simulado_itens = pd.concat([st.session_state.bd_simulado_itens, novo_lote], ignore_index=True)
+                                st.success("✔️ Lote registrado com sucesso! Pode passar para o próximo item.")
+                            else:
+                                st.error("⚠️ Preencha seu nome no campo acima antes de clicar em Enviar Lote.")
+                else:
+                    st.error("❌ Código de produto não encontrado na listagem desta carga.")
+            
+            st.markdown("---")
+            st.subheader("📋 Meus Itens Enviados nesta Carga")
+            meus_itens = st.session_state.bd_simulado_itens[st.session_state.bd_simulado_itens["ID_CARGA"] == id_carga_ativa]
+            if not meus_itens.empty:
+                st.dataframe(meus_itens[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE"]])
