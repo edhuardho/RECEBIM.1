@@ -7,42 +7,30 @@ import re
 
 st.set_page_config(page_title="Controle de Recebimento", layout="wide")
 
-# 🔑 COLOQUE O LINK DA SUA PLANILHA DO GOOGLE SHEETS AQUI DENTRO DAS ASPAS:
-# Certifique-se de que ela está compartilhada como "Qualquer pessoa com o link" e na função "Editor".
-URL_PLANILHA_DIRETA = "https://docs.google.com/spreadsheets/d/1Dr8ox9SraC2a6FLeWVNvIUBcLY68ORZkxkWBwL-hvBI/edit?usp=sharing"
+# 🖥️ BANCO DE DADOS GLOBAL COMPARTILHADO (A nível de Servidor)
+# Isso garante que o celular enxergue exatamente a mesma carga que o PC criou!
+if "bd_global_cargas" not in st.session_state.__class__.__dict__:
+    st.session_state.__class__.bd_global_cargas = pd.DataFrame(columns=["ID_CARGA", "NOME_CARGA", "CONTEUDO_CSV", "STATUS"])
+if "bd_global_itens" not in st.session_state.__class__.__dict__:
+    st.session_state.__class__.bd_global_itens = pd.DataFrame(columns=["ID_CARGA", "CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE", "CONFERENTE"])
+if "modelos_excel_memoria" not in st.session_state.__class__.__dict__:
+    st.session_state.__class__.modelos_excel_memoria = {}
 
-def obter_url_csv(url, aba_nome):
-    match = re.search(r"/d/([a-zA-Z0-9-_]+)", url)
-    if match:
-        id_planilha = match.group(1)
-        return f"https://docs.google.com/spreadsheets/d/{id_planilha}/gviz/tq?tqx=out:csv&sheet={aba_nome}"
-    return None
-
-# Tenta conectar via conexão oficial, se falhar, usa a leitura direta via pandas URL
-@st.cache_data(ttl=2) # Atualiza a cada 2 segundos para o celular ver em tempo real
-def carregar_dados_sheets(aba_nome):
-    try:
-        conn = st.connection("gsheets", type=st.Connection)
-        return conn.read(worksheet=aba_nome, ttl=0)
-    except Exception:
-        url_csv = obter_url_csv(URL_PLANILHA_DIRETA, aba_nome)
-        if url_csv:
-            try:
-                return pd.read_csv(url_csv)
-            except Exception:
-                return pd.DataFrame()
-        return pd.DataFrame()
-
-# Função para salvar os dados na planilha fazendo um envio via formulário ou instruindo o mock de sessão estável
-# Para garantir funcionamento imediato sem travar o supervisor, criamos um fallback persistente
+# Atalhos para facilitar a leitura no restante do código
 if "bd_nuvem_cargas" not in st.session_state:
     st.session_state.bd_nuvem_cargas = pd.DataFrame(columns=["ID_CARGA", "NOME_CARGA", "CONTEUDO_CSV", "STATUS"])
-if "bd_nuvem_itens" not in st.session_state:
-    st.session_state.bd_nuvem_itens = pd.DataFrame(columns=["ID_CARGA", "CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE", "CONFERENTE"])
 
 # ----------------- INTERFACE SHIFT (MENU LATERAL) -----------------
 st.sidebar.title("🎮 Controle de Acesso")
 perfil = st.sidebar.radio("Selecione o seu Perfil:", ["🖥️ Painel do Supervisor (PC)", "📱 Conferência na Doca (Celular)"])
+
+# Botão master para resetar o servidor caso queira limpar o dia de trabalho
+st.sidebar.markdown("---")
+if st.sidebar.button("🧹 Limpar Todas as Cargas do Sistema"):
+    st.session_state.__class__.bd_global_cargas = pd.DataFrame(columns=["ID_CARGA", "NOME_CARGA", "CONTEUDO_CSV", "STATUS"])
+    st.session_state.__class__.bd_global_itens = pd.DataFrame(columns=["ID_CARGA", "CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE", "CONFERENTE"])
+    st.session_state.__class__.modelos_excel_memoria = {}
+    st.rerun()
 
 # ----------------- 1. TELA DO SUPERVISOR (PC) -----------------
 if perfil == "🖥️ Painel do Supervisor (PC)":
@@ -75,20 +63,20 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                             codigo = match.group(1).strip().lstrip('0')
                             descricao = match.group(2).strip()
                             if not any(t in descricao.upper() for t in ["TOTAL", "EMISSÃO", "PÁGINA", "RELATÓRIO", "CLIENTE", "MOTORISTA"]):
-                                linhas_produtos.append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
+                                .append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
                     
                     if len(linhas_produtos) > 0:
                         df_produtos = pd.DataFrame(linhas_produtos).drop_duplicates(subset=['Codigo_Prod'])
                         id_carga = str(int(datetime.now().timestamp()))
                         
-                        # Salva na tabela do servidor global para compartilhamento imediato
+                        # Injeta no banco global compartilhado
                         nova_carga = pd.DataFrame([{"ID_CARGA": id_carga, "NOME_CARGA": nome_carga, "CONTEUDO_CSV": df_produtos.to_json(orient="records"), "STATUS": "EM CONFERENCIA"}])
-                        st.session_state.bd_nuvem_cargas = pd.concat([st.session_state.bd_nuvem_cargas, nova_carga], ignore_index=True)
+                        st.session_state.__class__.bd_global_cargas = pd.concat([st.session_state.__class__.bd_global_cargas, nova_carga], ignore_index=True)
                         
-                        # Guarda o modelo Excel associado a ID
-                        st.session_state[f"modelo_{id_carga}"] = arquivo_modelo.read()
+                        # Guarda o binário do modelo Excel associado a ID
+                        st.session_state.__class__.modelos_excel_memoria[id_carga] = arquivo_modelo.read()
                         
-                        st.success(f"🎉 Carga '{nome_carga}' liberada com sucesso! {len(df_produtos)} produtos disponíveis para a Doca.")
+                        st.success(f"🎉 Carga '{nome_carga}' liberada com sucesso! {len(df_produtos)} produtos disponíveis para a Doca no Celular.")
                     else:
                         st.error("⚠️ Nenhum produto encontrado no CSV.")
                 except Exception as e:
@@ -98,7 +86,7 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
 
     with tab2:
         st.subheader("Acompanhamento em Tempo Real")
-        df_cargas = st.session_state.bd_nuvem_cargas
+        df_cargas = st.session_state.__class__.bd_global_cargas
         cargas_ativas = df_cargas[df_cargas["STATUS"] == "EM CONFERENCIA"] if not df_cargas.empty else pd.DataFrame()
         
         if cargas_ativas.empty:
@@ -108,7 +96,7 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
             row_carga = cargas_ativas[cargas_ativas["NOME_CARGA"] == escolha_carga].iloc[0]
             id_sel = str(row_carga["ID_CARGA"])
             
-            df_bipado = st.session_state.bd_nuvem_itens[st.session_state.bd_nuvem_itens["ID_CARGA"].astype(str) == id_sel]
+            df_bipado = st.session_state.__class__.bd_global_itens[st.session_state.__class__.bd_global_itens["ID_CARGA"].astype(str) == id_sel]
             
             st.write("### Itens conferidos pela equipe via celular:")
             st.dataframe(df_bipado)
@@ -118,7 +106,7 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                     st.error("Nenhum item foi conferido nessa carga ainda.")
                 else:
                     try:
-                        modelo_bytes = st.session_state.get(f"modelo_{id_sel}")
+                        modelo_bytes = st.session_state.__class__.modelos_excel_memoria.get(id_sel)
                         wb = openpyxl.load_workbook(io.BytesIO(modelo_bytes))
                         aba_nome = "SHELF" if "SHELF" in wb.sheetnames else wb.sheetnames[0]
                         ws = wb[aba_nome]
@@ -140,7 +128,8 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                         wb.save(buffer)
                         buffer.seek(0)
                         
-                        st.session_state.bd_nuvem_cargas.loc[st.session_state.bd_nuvem_cargas["ID_CARGA"].astype(str) == id_sel, "STATUS"] = "FINALIZADO"
+                        # Altera o status para Finalizado
+                        st.session_state.__class__.bd_global_cargas.loc[st.session_state.__class__.bd_global_cargas["ID_CARGA"].astype(str) == id_sel, "STATUS"] = "FINALIZADO"
                         
                         st.success("🎉 Planilha gerada com sucesso!")
                         st.download_button(
@@ -156,11 +145,14 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
 else:
     st.title("📱 Conferência de Entrada - Doca")
     
-    df_cargas = st.session_state.bd_nuvem_cargas
+    df_cargas = st.sidebar.button("🔄 Atualizar Lista de Cargas") if st.sidebar.button else True
+    df_cargas = st.session_state.__class__.bd_global_cargas
     cargas_disponiveis = df_cargas[df_cargas["STATUS"] == "EM CONFERENCIA"] if not df_cargas.empty else pd.DataFrame()
     
     if cargas_disponiveis.empty:
         st.success("✅ Nenhuma carga pendente de conferência na doca!")
+        if st.button("🔄 Buscar Novas Cargas"):
+            st.rerun()
     else:
         carga_selecionada = st.selectbox("Selecione a Carga para conferir:", cargas_disponiveis["NOME_CARGA"].unique())
         row_c = cargas_disponiveis[cargas_disponiveis["NOME_CARGA"] == carga_selecionada].iloc[0]
@@ -201,7 +193,7 @@ else:
                                 "QUANTIDADE": f_qtd,
                                 "CONFERENTE": conferente
                             }])
-                            st.session_state.bd_nuvem_itens = pd.concat([st.session_state.bd_nuvem_itens, novo_lote], ignore_index=True)
+                            st.session_state.__class__.bd_global_itens = pd.concat([st.session_state.__class__.bd_global_itens, novo_lote], ignore_index=True)
                             st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
                         else:
                             st.error("⚠️ Preencha seu nome antes de enviar.")
@@ -210,6 +202,6 @@ else:
         
         st.markdown("---")
         st.subheader("📋 Meus Itens Enviados")
-        meus_itens = st.session_state.bd_nuvem_itens[st.session_state.bd_nuvem_itens["ID_CARGA"] == id_carga_ativa]
+        meus_itens = st.session_state.__class__.bd_global_itens[st.session_state.__class__.bd_global_itens["ID_CARGA"] == id_carga_ativa]
         if not meus_itens.empty:
             st.dataframe(meus_itens[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE"]])
