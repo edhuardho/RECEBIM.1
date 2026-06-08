@@ -4,35 +4,13 @@ from datetime import datetime
 import openpyxl
 import io
 import re
-import requests
 
 st.set_page_config(page_title="Controle de Recebimento", layout="wide")
 
-# COLOQUE O LINK DA SUA PLANILHA DO GOOGLE SHEETS AQUI DENTRO DAS ASPAS:
+# COLOQUE O LINK DA SUA PLANILHA DO GOOGLE SHEETS AQUI DENTRO DAS ASPAS (OPCIONAL PARA ESTA VERSÃO):
 URL_PLANILHA = "https://docs.google.com/spreadsheets/d/SEU_ID_AQUI/edit?usp=sharing"
 
-# Função auxiliar para converter o link padrão do Sheets em link de exportação CSV
-def obter_url_csv(url, aba_nome):
-    match = re.search(r"/d/([a-zA-Z0-9-_]+)", url)
-    if match:
-        id_planilha = match.group(1)
-        return f"https://docs.google.com/spreadsheets/d/{id_planilha}/gviz/tq?tqx=out:csv&sheet={aba_nome}"
-    return None
-
-# Função para ler dados do Google Sheets de forma aberta e direta
-def ler_aba_sheets(aba_nome):
-    url_csv = obter_url_csv(URL_PLANILHA, aba_nome)
-    if url_csv:
-        try:
-            df = pd.read_csv(url_csv)
-            return df
-        except Exception:
-            return pd.DataFrame()
-    return pd.DataFrame()
-
-# Função para salvar dados no Google Sheets via API de Formulário ou Alerta de Script
-# Como alternativa robusta para o Streamlit Cloud puro, vamos gerenciar o estado global ou instruir o salvamento
-# Nota: Para persistência real multi-usuário no Sheets sem chaves complexas, simulamos o buffer de sincronização
+# Inicialização dos bancos de dados temporários no servidor do Streamlit
 if "bd_simulado_cargas" not in st.session_state:
     st.session_state.bd_simulado_cargas = pd.DataFrame(columns=["ID_CARGA", "NOME_CARGA", "CONTEUDO_CSV", "STATUS"])
 if "bd_simulado_itens" not in st.session_state:
@@ -59,35 +37,50 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
         if st.button("🚀 Liberar Carga para a Doca"):
             if nome_carga and arquivo_csv is not None and arquivo_modelo is not None:
                 try:
-                    conteudo = arquivo_csv.read().decode("utf-8", errors="ignore")
-                    linhas = conteudo.splitlines()
+                    # Lendo o CSV tratando a separação por vírgula que vem no arquivo da Tirolez
+                    # 'header=None' garante que não vamos perder a primeira linha de produto
+                    df_bruto = pd.read_csv(arquivo_csv, sep=None, engine='python', header=None, encoding='utf-8', errors='ignore')
+                    
                     linhas_produtos = []
                     
-                    for linha in linhas:
-                        linha_limpa = linha.replace('"', '').strip()
-                        match = re.search(r'^(\d{4,8})\s*-\s*(.+)$', linha_limpa)
-                        if not match:
-                            match = re.search(r'^(\d{4,8})\s*[,;]\s*(.+)$', linha_limpa)
-                        if match:
-                            codigo = match.group(1).strip().lstrip('0')
-                            descricao = match.group(2).strip()
-                            if not any(t in descricao.upper() for t in ["TOTAL", "EMISSÃO", "PÁGINA", "RELATÓRIO"]):
-                                linhas_produtos.append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
+                    for idx, row in df_bruto.iterrows():
+                        # Pega o conteúdo da primeira célula da linha
+                        texto_linha = str(row.iloc[0]).strip()
+                        
+                        # Se o arquivo tiver mais colunas (separado por vírgula), junta a descrição
+                        if len(row) > 1 and not pd.isna(row.iloc[1]):
+                            desc_extra = str(row.iloc[1]).strip()
+                            # Se a primeira coluna for só número, ela é o código e a segunda é a descrição
+                            if texto_linha.isdigit():
+                                codigo = texto_linha.lstrip('0')
+                                descricao = desc_extra
+                                if not any(t in descricao.upper() for t in ["TOTAL", "EMISSÃO", "PÁGINA", "RELATÓRIO"]):
+                                    linhas_produtos.append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
+                                continue
+
+                        # Caso o código e a descrição estejam na mesma célula separados por " - "
+                        if " - " in texto_linha:
+                            texto_limpo = texto_linha.replace('"', '').strip()
+                            partes = texto_limpo.split(' - ', 1)
+                            if len(partes) == 2:
+                                codigo = partes[0].strip().lstrip('0')
+                                descricao = partes[1].strip()
+                                if codigo.isdigit() and not any(t in descricao.upper() for t in ["TOTAL", "EMISSÃO", "PÁGINA", "RELATÓRIO"]):
+                                    linhas_produtos.append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
                     
-                    if linhas_produtos:
+                    if len(linhas_produtos) > 0:
                         df_produtos = pd.DataFrame(linhas_produtos).drop_duplicates(subset=['Codigo_Prod'])
                         
-                        # Salva no estado global do Servidor (visível para o celular)
                         id_carga = str(int(datetime.now().timestamp()))
-                        nova_linha = pd.DataFrame([{"ID_CARGA": id_carga, "NOME_CARGA": nome_carga, "CONTEUDO_CSV": df_produtos.to_json(), "STATUS": "EM CONFERENCIA"}])
+                        nova_linha = pd.DataFrame([{"ID_CARGA": id_carga, "NOME_CARGA": nome_carga, "CONTEUDO_CSV": df_produtos.to_json(orient="records"), "STATUS": "EM CONFERENCIA"}])
                         st.session_state.bd_simulado_cargas = pd.concat([st.session_state.bd_simulado_cargas, nova_linha], ignore_index=True)
                         
-                        # Guarda o modelo Excel temporariamente no servidor
+                        # Guarda o modelo Excel na memória do servidor
                         st.session_state[f"modelo_{id_carga}"] = arquivo_modelo.read()
                         
-                        st.success(f"🎉 Carga '{nome_carga}' liberada com sucesso! O conferente já pode atualizar o celular.")
+                        st.success(f"🎉 Carga '{nome_carga}' liberada com sucesso! {len(df_produtos)} produtos disponíveis para a Doca.")
                     else:
-                        st.error("Não foi possível encontrar produtos no formato correto dentro do CSV.")
+                        st.error("⚠️ Estrutura de dados não reconhecida. Verifique se o arquivo enviado é o correto.")
                 except Exception as e:
                     st.error(f"Erro ao processar arquivos: {e}")
             else:
@@ -107,7 +100,6 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                 row_carga = cargas_ativas[cargas_ativas["NOME_CARGA"] == escolha_carga].iloc[0]
                 id_sel = row_carga["ID_CARGA"]
                 
-                # Filtra os itens que o pessoal da doca já bipou no celular
                 df_bipado = st.session_state.bd_simulado_itens[st.session_state.bd_simulado_itens["ID_CARGA"] == id_sel]
                 
                 st.write("### Itens já conferidos pela equipe na doca:")
@@ -140,7 +132,6 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                             wb.save(buffer)
                             buffer.seek(0)
                             
-                            # Atualiza status da carga
                             st.session_state.bd_simulado_cargas.loc[st.session_state.bd_simulado_cargas["ID_CARGA"] == id_sel, "STATUS"] = "FINALIZADO"
                             
                             st.success("🎉 Relatório processado com sucesso!")
@@ -170,14 +161,16 @@ else:
             row_c = cargas_disponiveis[cargas_disponiveis["NOME_CARGA"] == carga_selecionada].iloc[0]
             id_carga_ativa = row_c["ID_CARGA"]
             
-            # Recria o DataFrame de consulta de produtos a partir do JSON guardado
-            df_produtos_carga = pd.read_json(row_c["CONTEUDO_CSV"])
+            # Recria o DataFrame lendo o formato string JSON correto
+            df_produtos_carga = pd.read_json(io.StringIO(row_c["CONTEUDO_CSV"]))
             
             st.markdown("---")
             conferente = st.text_input("Nome do Conferente:", key="nome_conf")
             codigo_bipado = st.text_input("Digite ou Bipe o Código do Produto:", key="code_bip").strip().lstrip('0')
             
             if codigo_bipado:
+                # Converte coluna para string para bater com o input text
+                df_produtos_carga["Codigo_Prod"] = df_produtos_carga["Codigo_Prod"].astype(str)
                 item = df_produtos_carga[df_produtos_carga["Codigo_Prod"] == codigo_bipado]
                 
                 if not item.empty:
@@ -213,9 +206,8 @@ else:
                 else:
                     st.error("❌ Código de produto não pertence a esta carga.")
             
-            # Mostra o que o conferente atual já fez
             st.markdown("---")
-            st.subheader("📋 Meus Itens Enviados")
+            st.subheader("📋 Meus Itens Enviados nesta Carga")
             meus_itens = st.session_state.bd_simulado_itens[st.session_state.bd_simulado_itens["ID_CARGA"] == id_carga_ativa]
             if not meus_itens.empty:
                 st.dataframe(meus_itens[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE"]])
