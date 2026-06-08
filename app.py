@@ -3,40 +3,64 @@ import pandas as pd
 from datetime import datetime
 import openpyxl
 import io
+import re
 
 st.set_page_config(page_title="Controle de Recebimento", layout="centered")
 
 st.title("📦 Sistema de Recebimento & Shelf Life")
-st.write("Insira o CSV da Delicari, faça a conferência e gere a planilha oficial.")
+st.write("Insira o CSV de recebimento, faça a conferência e gere a planilha oficial.")
 
 if "dados_conferidos" not in st.session_state:
     st.session_state.dados_conferidos = []
 if "csv_tratado" not in st.session_state:
     st.session_state.csv_tratado = None
 
+# Botão para limpar a conferência atual e começar um novo caminhão
+if st.sidebar.button("🧹 Limpar Dados / Novo Recebimento"):
+    st.session_state.dados_conferidos = []
+    st.session_state.csv_tratado = None
+    st.rerun()
+
 st.subheader("📁 1. Upload de Arquivos")
-arquivo_csv = st.file_uploader("Suba o arquivo CSV bruto (DELICARI)", type=["csv"], key="csv")
+arquivo_csv = st.file_uploader("Suba o arquivo CSV bruto (Delicari, Tirolez, etc.)", type=["csv", "txt"], key="csv")
 arquivo_modelo = st.file_uploader("Suba o seu modelo padrão (SHELF - PADRÃO.xlsx)", type=["xlsx"], key="modelo")
 
 if arquivo_csv is not None and st.session_state.csv_tratado is None:
     try:
-        df_bruto = pd.read_csv(arquivo_csv, sep="\t", encoding="utf-8", header=None)
+        # Lê o arquivo completo como texto
+        conteudo = arquivo_csv.read().decode("utf-8", errors="ignore")
+        linhas = conteudo.splitlines()
+        
         linhas_produtos = []
         
-        for idx, row in df_bruto.iterrows():
-            texto_linha = str(row.iloc[0])
-            if " - " in texto_linha and ("IOGURTE" in texto_linha or "OGURTE" in texto_linha):
-                texto_limpo = texto_linha.replace('"', '').replace('-', '').strip()
-                partes = texto_limpo.split(' ', 1)
-                if len(partes) == 2:
-                    codigo = partes[0].strip().lstrip('0')
-                    descricao = partes[1].replace('- ', '').strip()
+        for linha in linhas:
+            # Remove aspas e espaços extras
+            linha_limpa = linha.replace('"', '').strip()
+            
+            # Expressão regular para capturar: CÓDIGO (4 a 8 dígitos) e DESCRIÇÃO após o " - "
+            match = re.search(r'^(\d{4,8})\s*-\s*(.+)$', linha_limpa)
+            
+            if not match:
+                # Tenta capturar se estiver separado por vírgula ou ponto e vírgula (ex: 603128,PRODUTO)
+                match = re.search(r'^(\d{4,8})\s*[,;]\s*(.+)$', linha_limpa)
+            
+            if match:
+                codigo = match.group(1).strip().lstrip('0') # Remove zeros à esquerda
+                descricao = match.group(2).strip()
+                
+                # Ignora linhas que sejam apenas totais ou informativos do sistema
+                if not any(termo in descricao.upper() for termo in ["TOTAL", "EMISSÃO", "PÁGINA", "RELATÓRIO"]):
                     linhas_produtos.append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
         
-        st.session_state.csv_tratado = pd.DataFrame(linhas_produtos)
-        st.success(f"✅ CSV processado! {len(linhas_produtos)} produtos encontrados.")
+        if len(linhas_produtos) > 0:
+            df_resultado = pd.DataFrame(linhas_produtos).drop_duplicates(subset=['Codigo_Prod'])
+            st.session_state.csv_tratado = df_resultado
+            st.success(f"✅ Sucesso! Encontrados {len(df_resultado)} produtos da Tirolez/Delicari prontos para conferência.")
+        else:
+            st.warning("⚠️ Nenhum produto foi extraído. Verifique se o formato do arquivo está correto.")
+            
     except Exception as e:
-        st.error(f"Erro ao processar CSV: {e}")
+        st.error(f"Erro ao processar o arquivo: {e}")
 
 if st.session_state.csv_tratado is not None and arquivo_modelo is not None:
     st.markdown("---")
@@ -72,7 +96,7 @@ if st.session_state.csv_tratado is not None and arquivo_modelo is not None:
                     })
                     st.toast(f"Lote salvo para o item {codigo_digitado}!", icon="✔️")
         else:
-            st.error("⚠️ Código não encontrado neste recebimento.")
+            st.error("⚠️ Código não encontrado neste recebimento. Verifique o número.")
 
     if st.session_state.dados_conferidos:
         st.markdown("---")
