@@ -1,18 +1,7 @@
-import os
-import subprocess
-import sys
-
-# Força a instalação das ferramentas direto pelo código se elas não existirem
-try:
-    import openpyxl
-    import pandas as pd
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pandas", "openpyxl"])
-    import openpyxl
-    import pandas as pd
-
 import streamlit as st
+import pandas as pd
 from datetime import datetime
+import openpyxl
 import io
 
 st.set_page_config(page_title="Controle de Recebimento", layout="centered")
@@ -100,7 +89,7 @@ if st.session_state.csv_tratado is not None and arquivo_modelo is not None:
                 linha_inicio = 5
                 
                 for index, row in df_conferidos.iterrows():
-                    linha_atual = gateway_inicio = linha_inicio + index
+                    linha_atual = linha_inicio + index
                     ws[f"A{linha_atual}"] = int(row["CODIGO"]) if row["CODIGO"].isdigit() else row["CODIGO"]
                     ws[f"B{linha_atual}"] = row["DESCRIÇÃO DO PRODUTO"]
                     ws[f"C{linha_atual}"] = row["FABRICAÇÃO"]
