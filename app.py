@@ -4,6 +4,7 @@ from datetime import datetime
 import openpyxl
 import io
 import re
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Controle de Recebimento", layout="wide")
 
@@ -141,7 +142,6 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
 else:
     st.title("📱 Conferência de Entrada - Doca")
     
-    # Menu rápido de atualização no topo da tela do celular
     if st.button("🔄 Atualizar Lista de Cargas"):
         st.rerun()
         
@@ -159,7 +159,7 @@ else:
         
         st.markdown("---")
         conferente = st.text_input("Nome do Conferente:")
-        codigo_bipado = st.text_input("Digite ou Bipe o Código do Produto:").strip().lstrip('0')
+        codigo_bipado = st.text_input("Digite ou Bipe o Código do Produto:", autocomplete="off")
         
         if codigo_bipado:
             df_produtos_carga["Codigo_Prod"] = df_produtos_carga["Codigo_Prod"].astype(str)
@@ -170,30 +170,60 @@ else:
                 st.info(f"📦 **Item:** {desc_item}")
                 
                 with st.form(key="form_celular", clear_on_submit=True):
+                    st.write("📅 **Preenchimento de Datas (Apenas números - DD/MM/AAAA)**")
+                    
                     col1, col2 = st.columns(2)
                     with col1:
-                        f_fab = st.date_input("Data de Fabricação", value=datetime.today())
+                        f_fab_txt = st.text_input("Data de Fabricação:", max_chars=10, placeholder="Ex: 08/06/2026")
                     with col2:
-                        f_ven = st.date_input("Data de Vencimento", value=datetime.today())
+                        f_ven_txt = st.text_input("Data de Vencimento:", max_chars=10, placeholder="Ex: 08/09/2026")
                     
                     f_qtd = st.number_input("Quantidade:", min_value=1, step=1)
                     btn_enviar = st.form_submit_button("🚀 Enviar Lote para o Supervisor")
                     
+                    # 💡 INJEÇÃO JAVASCRIPT: Força teclado numérico e coloca as barras sozinho ao digitar
+                    components.html(
+                        """
+                        <script>
+                        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
+                        inputs.forEach(function(input) {
+                            if(input.placeholder && input.placeholder.includes("Ex: 08/06")) {
+                                input.setAttribute('inputmode', 'numeric');
+                                input.addEventListener('input', function(e) {
+                                    var x = e.target.value.replace(/\D/g, '').match(/(\d{0,2})(\d{0,2})(\d{0,4})/);
+                                    e.target.value = !x[2] ? x[1] : x[1] + '/' + x[2] + (x[3] ? '/' + x[3] : '');
+                                });
+                            }
+                        });
+                        </script>
+                        """,
+                        height=0,
+                    )
+                    
                     if btn_enviar:
-                        if conferente:
-                            novo_lote = pd.DataFrame([{
-                                "ID_CARGA": id_carga_ativa,
-                                "CODIGO": codigo_bipado,
-                                "DESCRICAO": desc_item,
-                                "FABRICACAO": f_fab.strftime('%d/%m/%Y'),
-                                "VALIDADE": f_ven.strftime('%d/%m/%Y'),
-                                "QUANTIDADE": f_qtd,
-                                "CONFERENTE": conferente
-                            }])
-                            st.session_state.__class__.bd_global_itens = pd.concat([st.session_state.__class__.bd_global_itens, novo_lote], ignore_index=True)
-                            st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
-                        else:
+                        if not conferente:
                             st.error("⚠️ Preencha seu nome antes de enviar.")
+                        elif len(f_fab_txt) < 10 or len(f_ven_txt) < 10:
+                            st.error("⚠️ Digite as datas completas com dia, mês e ano (Ex: 08/06/2026).")
+                        else:
+                            try:
+                                # Valida se as datas digitadas são reais antes de salvar
+                                datetime.strptime(f_fab_txt, '%d/%m/%Y')
+                                datetime.strptime(f_ven_txt, '%d/%m/%Y')
+                                
+                                novo_lote = pd.DataFrame([{
+                                    "ID_CARGA": id_carga_ativa,
+                                    "CODIGO": codigo_bipado,
+                                    "DESCRICAO": desc_item,
+                                    "FABRICACAO": f_fab_txt,
+                                    "VALIDADE": f_ven_txt,
+                                    "QUANTIDADE": f_qtd,
+                                    "CONFERENTE": conferente
+                                }])
+                                st.session_state.__class__.bd_global_itens = pd.concat([st.session_state.__class__.bd_global_itens, novo_lote], ignore_index=True)
+                                st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
+                            except ValueError:
+                                st.error("❌ Data inválida! Verifique os dias e meses digitados (Ex: não existe mês 13 ou dia 32).")
             else:
                 st.error("❌ Código de produto não encontrado nesta carga.")
         
