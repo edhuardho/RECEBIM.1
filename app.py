@@ -9,7 +9,7 @@ st.set_page_config(page_title="Controle de Recebimento", layout="wide")
 
 # 🔑 COLOQUE O LINK DA SUA PLANILHA DO GOOGLE SHEETS AQUI DENTRO DAS ASPAS:
 # Certifique-se de que ela está compartilhada como "Qualquer pessoa com o link" e na função "Editor".
-URL_PLANILHA_DIRETA = "https://docs.google.com/spreadsheets/d/SEU_ID_DA_PLANILHA_AQUI/edit?usp=sharing"
+URL_PLANILHA_DIRETA = "https://docs.google.com/spreadsheets/d/1Dr8ox9SraC2a6FLeWVNvIUBcLY68ORZkxkWBwL-hvBI/edit?usp=sharing"
 
 def obter_url_csv(url, aba_nome):
     match = re.search(r"/d/([a-zA-Z0-9-_]+)", url)
