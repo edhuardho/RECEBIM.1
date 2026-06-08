@@ -1,7 +1,18 @@
+import os
+import subprocess
+import sys
+
+# Força a instalação das ferramentas direto pelo código se elas não existirem
+try:
+    import openpyxl
+    import pandas as pd
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pandas", "openpyxl"])
+    import openpyxl
+    import pandas as pd
+
 import streamlit as st
-import pandas as pd
 from datetime import datetime
-import openpyxl
 import io
 
 st.set_page_config(page_title="Controle de Recebimento", layout="centered")
@@ -20,23 +31,21 @@ arquivo_modelo = st.file_uploader("Suba o seu modelo padrão (SHELF - PADRÃO.xl
 
 if arquivo_csv is not None and st.session_state.csv_tratado is None:
     try:
-        # Lê o CSV tratando linhas irregulares com tabulação
         df_bruto = pd.read_csv(arquivo_csv, sep="\t", encoding="utf-8", header=None)
         linhas_produtos = []
         
         for idx, row in df_bruto.iterrows():
             texto_linha = str(row.iloc[0])
             if " - " in texto_linha and ("IOGURTE" in texto_linha or "OGURTE" in texto_linha):
-                # Limpa os caracteres do relatório [-[-[-[
                 texto_limpo = texto_linha.replace('"', '').replace('-', '').strip()
                 partes = texto_limpo.split(' ', 1)
                 if len(partes) == 2:
-                    codigo = partes[0].strip().lstrip('0') # Remove zeros à esquerda para bater com o Excel
+                    codigo = partes[0].strip().lstrip('0')
                     descricao = partes[1].replace('- ', '').strip()
                     linhas_produtos.append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
         
         st.session_state.csv_tratado = pd.DataFrame(linhas_produtos)
-        st.success(f"✅ CSV processado! {len(linhas_produtos)} produtos encontrados para conferência.")
+        st.success(f"✅ CSV processado! {len(linhas_produtos)} produtos encontrados.")
     except Exception as e:
         st.error(f"Erro ao processar CSV: {e}")
 
@@ -88,11 +97,10 @@ if st.session_state.csv_tratado is not None and arquivo_modelo is not None:
                 aba_nome = "SHELF" if "SHELF" in wb.sheetnames else wb.sheetnames[0]
                 ws = wb[aba_nome]
                 
-                # Encontra a linha correta após o cabeçalho do relatório original (linha 5)
                 linha_inicio = 5
                 
                 for index, row in df_conferidos.iterrows():
-                    linha_atual = linha_inicio + index
+                    linha_atual = gateway_inicio = linha_inicio + index
                     ws[f"A{linha_atual}"] = int(row["CODIGO"]) if row["CODIGO"].isdigit() else row["CODIGO"]
                     ws[f"B{linha_atual}"] = row["DESCRIÇÃO DO PRODUTO"]
                     ws[f"C{linha_atual}"] = row["FABRICAÇÃO"]
