@@ -9,7 +9,6 @@ import streamlit.components.v1 as components
 st.set_page_config(page_title="Controle de Recebimento", layout="wide")
 
 # 🖥️ BANCO DE DADOS GLOBAL COMPARTILHADO (A nível de Servidor)
-# Isso garante que o celular enxergue exatamente a mesma carga que o PC criou!
 if "bd_global_cargas" not in st.session_state.__class__.__dict__:
     st.session_state.__class__.bd_global_cargas = pd.DataFrame(columns=["ID_CARGA", "NOME_CARGA", "CONTEUDO_CSV", "STATUS"])
 if "bd_global_itens" not in st.session_state.__class__.__dict__:
@@ -53,13 +52,16 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                     for linha in linhas_texto:
                         if not linha.strip():
                             continue
-                        linha_limpa = line_clean = linha.replace('"', '').replace('-[-[-[-[-[-[-[-[', '').replace('\t', ' ').strip()
+                        linha_limpa = linha.replace('"', '').replace('-[-[-[-[-[-[-[-[', '').replace('\t', ' ').strip()
                         match = re.search(r'(\d{4,8})\s*-\s*([^,]+)', linha_limpa)
                         
                         if match:
                             codigo = match.group(1).strip().lstrip('0')
                             descricao = match.group(2).strip()
-                            if not any(t in descricao.upper() for t in ["TOTAL", "EMISSÃO", "PÁGINA", "RELATÓRIO", "CLIENTE", "MOTORISTA"]):
+                            
+                            # 🛑 FILTRO DE SEGURANÇA: Bloqueia linhas de clientes, motoristas, relatórios e totais
+                            termos_bloqueados = ["TOTAL", "EMISSÃO", "PÁGINA", "RELATÓRIO", "CLIENTE", "MOTORISTA", "FORNECEDOR", "CONHECIMENTO"]
+                            if not any(t in descricao.upper() or t in linha_limpa.upper() for t in termos_bloqueados):
                                 linhas_produtos.append({"Codigo_Prod": codigo, "Descricao_Prod": descricao})
                     
                     if len(linhas_produtos) > 0:
@@ -73,9 +75,9 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                         # Guarda o binário do modelo Excel associado a ID
                         st.session_state.__class__.modelos_excel_memoria[id_carga] = arquivo_modelo.read()
                         
-                        st.success(f"🎉 Carga '{nome_carga}' liberada com sucesso! {len(df_produtos)} produtos disponíveis para a Doca no Celular.")
+                        st.success(f"🎉 Carga '{nome_carga}' liberada com sucesso! {len(df_produtos)} produtos limpos e disponíveis para a Doca.")
                     else:
-                        st.error("⚠️ Nenhum produto encontrado no CSV.")
+                        st.error("⚠️ Nenhum produto válido encontrado no CSV.")
                 except Exception as e:
                     st.error(f"Erro ao processar arquivos: {e}")
             else:
@@ -125,7 +127,6 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
                         wb.save(buffer)
                         buffer.seek(0)
                         
-                        # Altera o status para Finalizado
                         st.session_state.__class__.bd_global_cargas.loc[st.session_state.__class__.bd_global_cargas["ID_CARGA"].astype(str) == id_sel, "STATUS"] = "FINALIZADO"
                         
                         st.success("🎉 Planilha gerada com sucesso!")
@@ -176,7 +177,6 @@ else:
         
         # 🔍 VISUALIZADOR DE ITENS PENDENTES (O QUE FALTA CONFERIR)
         with st.expander("🔍 Visualizar Itens que FALTAM Conferir nesta Carga", expanded=False):
-            # Filtra do total apenas os códigos que ainda não foram bipados nenhuma vez
             df_faltantes = df_produtos_carga[~df_produtos_carga["Codigo_Prod"].isin(codigos_conferidos)]
             if df_faltantes.empty:
                 st.success("🎉 Todos os itens desta carga já foram enviados!")
@@ -223,3 +223,73 @@ else:
                     else:
                         f_qtd = st.number_input("Quantidade de Volumes/Unidades:", min_value=1, step=1)
                         peso_medio = 0.0
+                        qtd_pecas = 0
+                        
+                    btn_enviar = st.form_submit_button("🚀 Enviar Lote para o Supervisor")
+                    
+                    components.html(
+                        """
+                        <script>
+                        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
+                        inputs.forEach(function(input) {
+                            if(input.placeholder && input.placeholder.includes("Ex: 08/06")) {
+                                input.setAttribute('inputmode', 'numeric');
+                                input.addEventListener('input', function(e) {
+                                    var x = e.target.value.replace(/\D/g, '').match(/(\d{0,2})(\d{0,2})(\d{0,4})/);
+                                    e.target.value = !x[2] ? x[1] : x[1] + '/' + x[2] + (x[3] ? '/' + x[3] : '');
+                                });
+                            }
+                        });
+                        </script>
+                        """,
+                        height=0,
+                    )
+                    
+                    if btn_enviar:
+                        if not conferente:
+                            st.error("⚠️ Preencha seu nome antes de enviar.")
+                        elif len(f_fab_txt) < 10 or len(f_ven_txt) < 10:
+                            st.error("⚠️ Digite as datas completas com dia, mês e ano (Ex: 08/06/2026).")
+                        else:
+                            try:
+                                datetime.strptime(f_fab_txt, '%d/%m/%Y')
+                                datetime.strptime(f_ven_txt, '%d/%m/%Y')
+                                
+                                desc_final = f"{desc_item} ({qtd_pecas} pçs x {peso_medio}kg)" if tipo_unidade == "Peso Variável (Kg)" else desc_item
+                                
+                                novo_lote = pd.DataFrame([{
+                                    "ID_CARGA": id_carga_ativa,
+                                    "CODIGO": codigo_limpo,
+                                    "DESCRICAO": desc_final,
+                                    "FABRICACAO": f_fab_txt,
+                                    "VALIDADE": f_ven_txt,
+                                    "QUANTIDADE": f_qtd,
+                                    "CONFERENTE": conferente
+                                }])
+                                st.session_state.__class__.bd_global_itens = pd.concat([st.session_state.__class__.bd_global_itens, novo_lote], ignore_index=True)
+                                st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
+                                st.rerun()
+                            except ValueError:
+                                st.error("❌ Data inválida! Verifique os dias e meses digitados (Ex: não existe mês 13 ou dia 32).")
+            else:
+                st.error("❌ Código de produto não encontrado nesta carga.")
+        
+        st.markdown("---")
+        st.subheader("📋 Meus Itens Enviados (Histórico)")
+        if not meus_itens_carga.empty:
+            st.dataframe(
+                meus_itens_carga[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE", "CONFERENTE"]].rename(
+                    columns={
+                        "CODIGO": "Código",
+                        "DESCRICAO": "Produto",
+                        "FABRICACAO": "Fabricação",
+                        "VALIDADE": "Vencimento",
+                        "QUANTIDADE": "Qtd/Peso",
+                        "CONFERENTE": "Conferente"
+                    }
+                ),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("Nenhum item enviado para esta carga ainda.")
