@@ -4,7 +4,6 @@ from datetime import datetime
 import openpyxl
 import io
 import re
-import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Controle de Recebimento", layout="wide")
 
@@ -89,7 +88,7 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
         cargas_ativas = df_cargas[df_cargas["STATUS"] == "EM CONFERENCIA"] if not df_cargas.empty else pd.DataFrame()
         
         if cargas_ativas.empty:
-            st.info("Nenhuma carga activa no momento.")
+            st.info("Nenhuma carga ativa no momento.")
         else:
             escolha_carga = st.selectbox("Selecione a carga para verificar/fechar:", cargas_ativas["NOME_CARGA"].unique())
             row_carga = cargas_ativas[cargas_ativas["NOME_CARGA"] == escolha_carga].iloc[0]
@@ -161,7 +160,7 @@ else:
         
         meus_itens_carga = st.session_state.__class__.bd_global_itens[st.session_state.__class__.bd_global_itens["ID_CARGA"] == id_carga_ativa]
         
-        # 📊 PROGRESSO
+        # 📊 PROGRESSO DA CARGA
         total_produtos = len(df_produtos_carga)
         codigos_conferidos = meus_itens_carga["CODIGO"].astype(str).unique() if not meus_itens_carga.empty else []
         produtos_conferidos = len(codigos_conferidos)
@@ -194,13 +193,14 @@ else:
                 tipo_unidade = st.radio("Tipo de Medida:", ["Unidade (Un)", "Peso Variável (Kg)"], horizontal=True)
                 
                 with st.form(key="form_celular", clear_on_submit=True):
-                    st.write("📅 **Preenchimento de Datas (Apenas números - DD/MM/AAAA)**")
+                    st.write("📅 **Selecione as Datas de Fabricação e Vencimento**")
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        f_fab_txt = st.text_input("Data de Fabricação:", max_chars=10, placeholder="Ex: 08/06/2026")
+                        # Calendário nativo configurado para o padrão brasileiro DD/MM/AAAA
+                        f_fab_dt = st.date_input("Data de Fabricação:", value=datetime.today(), format="DD/MM/YYYY")
                     with col2:
-                        f_ven_txt = st.text_input("Data de Vencimento:", max_chars=10, placeholder="Ex: 08/09/2026")
+                        f_ven_dt = st.date_input("Data de Vencimento:", value=datetime.today(), format="DD/MM/YYYY")
                     
                     if tipo_unidade == "Peso Variável (Kg)":
                         st.write("⚖️ **Informações de Peso Variável**")
@@ -216,66 +216,32 @@ else:
                         peso_medio = 0.0
                         qtd_pecas = 0
                         
-                    st.info("💡 *Atenção:* Após digitar as datas, não aperte Enter! Clique diretamente no botão abaixo para enviar.")
                     btn_enviar = st.form_submit_button("🚀 Enviar Lote para o Supervisor")
-                    
-                    # 💡 MÁSCARA JS OTIMIZADA: Garante retenção dos dados e sincronia com o Streamlit
-                    components.html(
-                        """
-                        <script>
-                        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
-                        inputs.forEach(function(input) {
-                            if(input.placeholder && input.placeholder.includes("Ex: 08/06")) {
-                                input.setAttribute('inputmode', 'numeric');
-                                input.addEventListener('input', function(e) {
-                                    var val = e.target.value.replace(/\D/g, '');
-                                    var newVal = '';
-                                    if(val.length > 0) {
-                                        newVal += val.substr(0, 2);
-                                        if(val.length > 2) {
-                                            newVal += '/' + val.substr(2, 2);
-                                            if(val.length > 4) {
-                                                newVal += '/' + val.substr(4, 4);
-                                            }
-                                        }
-                                    }
-                                    e.target.value = newVal;
-                                    // Força o Streamlit a escutar a mudança do input antes do envio
-                                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                                });
-                            }
-                        });
-                        </script>
-                        """,
-                        height=0,
-                    )
                     
                     if btn_enviar:
                         if not conferente:
                             st.error("⚠️ Preencha seu nome antes de enviar.")
-                        elif len(f_fab_txt) < 10 or len(f_ven_txt) < 10:
-                            st.error("⚠️ Digite as datas completas com dia, mês e ano (Ex: 08/06/2026).")
+                        elif f_ven_dt <= f_fab_dt:
+                            st.warning("⚠️ Atenção: A data de vencimento deve ser maior do que a de fabricação.")
                         else:
-                            try:
-                                datetime.strptime(f_fab_txt, '%d/%m/%Y')
-                                datetime.strptime(f_ven_txt, '%d/%m/%Y')
-                                
-                                desc_final = f"{desc_item} ({qtd_pecas} pçs x {peso_medio}kg)" if tipo_unidade == "Peso Variável (Kg)" else desc_item
-                                
-                                novo_lote = pd.DataFrame([{
-                                    "ID_CARGA": id_carga_ativa,
-                                    "CODIGO": codigo_limpo,
-                                    "DESCRICAO": desc_final,
-                                    "FABRICACAO": f_fab_txt,
-                                    "VALIDADE": f_ven_txt,
-                                    "QUANTIDADE": f_qtd,
-                                    "CONFERENTE": conferente
-                                }])
-                                st.session_state.__class__.bd_global_itens = pd.concat([st.session_state.__class__.bd_global_itens, novo_lote], ignore_index=True)
-                                st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
-                                st.rerun()
-                            except ValueError:
-                                st.error("❌ Data inválida! Verifique os dias e meses digitados.")
+                            # Transforma a data selecionada na string formatada DD/MM/AAAA esperada pelo Excel
+                            f_fab_txt = f_fab_dt.strftime('%d/%m/%Y')
+                            f_ven_txt = f_ven_dt.strftime('%d/%m/%Y')
+                            
+                            desc_final = f"{desc_item} ({qtd_pecas} pçs x {peso_medio}kg)" if tipo_unidade == "Peso Variável (Kg)" else desc_item
+                            
+                            novo_lote = pd.DataFrame([{
+                                "ID_CARGA": id_carga_ativa,
+                                "CODIGO": codigo_limpo,
+                                "DESCRICAO": desc_final,
+                                "FABRICACAO": f_fab_txt,
+                                "VALIDADE": f_ven_txt,
+                                "QUANTIDADE": f_qtd,
+                                "CONFERENTE": conferente
+                            }])
+                            st.session_state.__class__.bd_global_itens = pd.concat([st.session_state.__class__.bd_global_itens, novo_lote], ignore_index=True)
+                            st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
+                            st.rerun()
             else:
                 st.error("❌ Código de produto não encontrado nesta carga.")
         
