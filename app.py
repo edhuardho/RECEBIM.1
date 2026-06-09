@@ -89,7 +89,7 @@ if perfil == "🖥️ Painel do Supervisor (PC)":
         cargas_ativas = df_cargas[df_cargas["STATUS"] == "EM CONFERENCIA"] if not df_cargas.empty else pd.DataFrame()
         
         if cargas_ativas.empty:
-            st.info("Nenhuma carga ativa no momento.")
+            st.info("Nenhuma carga activa no momento.")
         else:
             escolha_carga = st.selectbox("Selecione a carga para verificar/fechar:", cargas_ativas["NOME_CARGA"].unique())
             row_carga = cargas_ativas[cargas_ativas["NOME_CARGA"] == escolha_carga].iloc[0]
@@ -156,36 +156,28 @@ else:
         row_c = cargas_disponiveis[cargas_disponiveis["NOME_CARGA"] == carga_selecionada].iloc[0]
         id_carga_ativa = str(row_c["ID_CARGA"])
         
-        # Carrega e limpa os códigos do CSV original do fornecedor
         df_produtos_carga = pd.read_json(io.StringIO(row_c["CONTEUDO_CSV"]))
         df_produtos_carga["Codigo_Prod"] = df_produtos_carga["Codigo_Prod"].astype(str)
         
-        # Busca o que já foi bipado para esta carga
         meus_itens_carga = st.session_state.__class__.bd_global_itens[st.session_state.__class__.bd_global_itens["ID_CARGA"] == id_carga_ativa]
         
-        # 📊 CÁLCULO E BARRA DE PROGRESSO DA CARGA
+        # 📊 PROGRESSO
         total_produtos = len(df_produtos_carga)
         codigos_conferidos = meus_itens_carga["CODIGO"].astype(str).unique() if not meus_itens_carga.empty else []
         produtos_conferidos = len(codigos_conferidos)
         produtos_faltantes = max(0, total_produtos - produtos_conferidos)
-        
         percentual = (produtos_conferidos / total_produtos) if total_produtos > 0 else 0.0
         
         st.markdown("### 📈 Progresso da Conferência desta Carga")
         st.progress(percentual)
-        st.caption(f"✅ **{produtos_conferidos}** conferidos | ⏳ **{produtos_faltantes}** restantes de um total de **{total_produtos}** itens.")
+        st.caption(f"✅ **{produtos_conferidos}** conferidos | ⏳ **{produtos_faltantes}** restantes de **{total_produtos}** itens.")
         
-        # 🔍 VISUALIZADOR DE ITENS PENDENTES (O QUE FALTA CONFERIR)
-        with st.expander("🔍 Visualizar Itens que FALTAM Conferir nesta Carga", expanded=False):
+        with st.expander("🔍 Visualizar Itens que FALTAM Conferir", expanded=False):
             df_faltantes = df_produtos_carga[~df_produtos_carga["Codigo_Prod"].isin(codigos_conferidos)]
             if df_faltantes.empty:
                 st.success("🎉 Todos os itens desta carga já foram enviados!")
             else:
-                st.dataframe(
-                    df_faltantes.rename(columns={"Codigo_Prod": "Código", "Descricao_Prod": "Descrição do Produto"}),
-                    use_container_width=True,
-                    hide_index=True
-                )
+                st.dataframe(df_faltantes.rename(columns={"Codigo_Prod": "Código", "Descricao_Prod": "Descrição"}), use_container_width=True, hide_index=True)
         
         st.markdown("---")
         conferente = st.text_input("Nome do Conferente:")
@@ -199,7 +191,7 @@ else:
                 desc_item = item.iloc[0]["Descricao_Prod"]
                 st.info(f"📦 **Item:** {desc_item}")
                 
-                tipo_unidade = st.radio("Tipo de Medida do Item:", ["Unidade (Un)", "Peso Variável (Kg)"], horizontal=True)
+                tipo_unidade = st.radio("Tipo de Medida:", ["Unidade (Un)", "Peso Variável (Kg)"], horizontal=True)
                 
                 with st.form(key="form_celular", clear_on_submit=True):
                     st.write("📅 **Preenchimento de Datas (Apenas números - DD/MM/AAAA)**")
@@ -217,16 +209,17 @@ else:
                             peso_medio = st.number_input("Peso Médio da Peça (Kg):", min_value=0.001, step=0.001, format="%.3f")
                         with col_p2:
                             qtd_pecas = st.number_input("Quantidade Total de Peças:", min_value=1, step=1)
-                        
                         f_qtd = round(peso_medio * qtd_pecas, 3)
-                        st.warning(f"Calculado automaticamente peso total de: **{f_qtd} Kg**")
+                        st.warning(f"Peso total calculado: **{f_qtd} Kg**")
                     else:
                         f_qtd = st.number_input("Quantidade de Volumes/Unidades:", min_value=1, step=1)
                         peso_medio = 0.0
                         qtd_pecas = 0
                         
+                    st.info("💡 *Atenção:* Após digitar as datas, não aperte Enter! Clique diretamente no botão abaixo para enviar.")
                     btn_enviar = st.form_submit_button("🚀 Enviar Lote para o Supervisor")
                     
+                    # 💡 MÁSCARA JS OTIMIZADA: Garante retenção dos dados e sincronia com o Streamlit
                     components.html(
                         """
                         <script>
@@ -235,8 +228,20 @@ else:
                             if(input.placeholder && input.placeholder.includes("Ex: 08/06")) {
                                 input.setAttribute('inputmode', 'numeric');
                                 input.addEventListener('input', function(e) {
-                                    var x = e.target.value.replace(/\D/g, '').match(/(\d{0,2})(\d{0,2})(\d{0,4})/);
-                                    e.target.value = !x[2] ? x[1] : x[1] + '/' + x[2] + (x[3] ? '/' + x[3] : '');
+                                    var val = e.target.value.replace(/\D/g, '');
+                                    var newVal = '';
+                                    if(val.length > 0) {
+                                        newVal += val.substr(0, 2);
+                                        if(val.length > 2) {
+                                            newVal += '/' + val.substr(2, 2);
+                                            if(val.length > 4) {
+                                                newVal += '/' + val.substr(4, 4);
+                                            }
+                                        }
+                                    }
+                                    e.target.value = newVal;
+                                    // Força o Streamlit a escutar a mudança do input antes do envio
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
                                 });
                             }
                         });
@@ -270,7 +275,7 @@ else:
                                 st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
                                 st.rerun()
                             except ValueError:
-                                st.error("❌ Data inválida! Verifique os dias e meses digitados (Ex: não existe mês 13 ou dia 32).")
+                                st.error("❌ Data inválida! Verifique os dias e meses digitados.")
             else:
                 st.error("❌ Código de produto não encontrado nesta carga.")
         
@@ -279,17 +284,7 @@ else:
         if not meus_itens_carga.empty:
             st.dataframe(
                 meus_itens_carga[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE", "CONFERENTE"]].rename(
-                    columns={
-                        "CODIGO": "Código",
-                        "DESCRICAO": "Produto",
-                        "FABRICACAO": "Fabricação",
-                        "VALIDADE": "Vencimento",
-                        "QUANTIDADE": "Qtd/Peso",
-                        "CONFERENTE": "Conferente"
-                    }
+                    columns={"CODIGO": "Código", "DESCRICAO": "Produto", "FABRICACAO": "Fabricação", "VALIDADE": "Vencimento", "QUANTIDADE": "Qtd/Peso", "CONFERENTE": "Conferente"}
                 ),
-                use_container_width=True,
-                hide_index=True
+                use_container_width=True, hide_index=True
             )
-        else:
-            st.info("Nenhum item enviado para esta carga ainda.")
