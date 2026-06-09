@@ -155,14 +155,17 @@ else:
         row_c = cargas_disponiveis[cargas_disponiveis["NOME_CARGA"] == carga_selecionada].iloc[0]
         id_carga_ativa = str(row_c["ID_CARGA"])
         
+        # Carrega e limpa os códigos do CSV original do fornecedor
         df_produtos_carga = pd.read_json(io.StringIO(row_c["CONTEUDO_CSV"]))
         df_produtos_carga["Codigo_Prod"] = df_produtos_carga["Codigo_Prod"].astype(str)
         
-        # 📊 CÁLCULO E BARRA DE PROGRESSO DA CARGA
+        # Busca o que já foi bipado para esta carga
         meus_itens_carga = st.session_state.__class__.bd_global_itens[st.session_state.__class__.bd_global_itens["ID_CARGA"] == id_carga_ativa]
         
+        # 📊 CÁLCULO E BARRA DE PROGRESSO DA CARGA
         total_produtos = len(df_produtos_carga)
-        produtos_conferidos = meus_itens_carga["CODIGO"].nunique() if not meus_itens_carga.empty else 0
+        codigos_conferidos = meus_itens_carga["CODIGO"].astype(str).unique() if not meus_itens_carga.empty else []
+        produtos_conferidos = len(codigos_conferidos)
         produtos_faltantes = max(0, total_produtos - produtos_conferidos)
         
         percentual = (produtos_conferidos / total_produtos) if total_produtos > 0 else 0.0
@@ -170,6 +173,19 @@ else:
         st.markdown("### 📈 Progresso da Conferência desta Carga")
         st.progress(percentual)
         st.caption(f"✅ **{produtos_conferidos}** conferidos | ⏳ **{produtos_faltantes}** restantes de um total de **{total_produtos}** itens.")
+        
+        # 🔍 VISUALIZADOR DE ITENS PENDENTES (O QUE FALTA CONFERIR)
+        with st.expander("🔍 Visualizar Itens que FALTAM Conferir nesta Carga", expanded=False):
+            # Filtra do total apenas os códigos que ainda não foram bipados nenhuma vez
+            df_faltantes = df_produtos_carga[~df_produtos_carga["Codigo_Prod"].isin(codigos_conferidos)]
+            if df_faltantes.empty:
+                st.success("🎉 Todos os itens desta carga já foram enviados!")
+            else:
+                st.dataframe(
+                    df_faltantes.rename(columns={"Codigo_Prod": "Código", "Descricao_Prod": "Descrição do Produto"}),
+                    use_container_width=True,
+                    hide_index=True
+                )
         
         st.markdown("---")
         conferente = st.text_input("Nome do Conferente:")
@@ -183,7 +199,6 @@ else:
                 desc_item = item.iloc[0]["Descricao_Prod"]
                 st.info(f"📦 **Item:** {desc_item}")
                 
-                # Tipo de Unidade fora do formulário para atualizar a tela dinamicamente
                 tipo_unidade = st.radio("Tipo de Medida do Item:", ["Unidade (Un)", "Peso Variável (Kg)"], horizontal=True)
                 
                 with st.form(key="form_celular", clear_on_submit=True):
@@ -195,7 +210,6 @@ else:
                     with col2:
                         f_ven_txt = st.text_input("Data de Vencimento:", max_chars=10, placeholder="Ex: 08/09/2026")
                     
-                    # Se for Peso Variável, habilita campos de peso médio e peças
                     if tipo_unidade == "Peso Variável (Kg)":
                         st.write("⚖️ **Informações de Peso Variável**")
                         col_p1, col_p2 = st.columns(2)
@@ -204,67 +218,8 @@ else:
                         with col_p2:
                             qtd_pecas = st.number_input("Quantidade Total de Peças:", min_value=1, step=1)
                         
-                        # A quantidade final inserida no Excel será o peso total calculado automaticamente
                         f_qtd = round(peso_medio * qtd_pecas, 3)
                         st.warning(f"Calculado automaticamente peso total de: **{f_qtd} Kg**")
                     else:
                         f_qtd = st.number_input("Quantidade de Volumes/Unidades:", min_value=1, step=1)
                         peso_medio = 0.0
-                        qtd_pecas = 0
-                        
-                    btn_enviar = st.form_submit_button("🚀 Enviar Lote para o Supervisor")
-                    
-                    # 💡 INJEÇÃO JAVASCRIPT: Força teclado numérico nas datas
-                    components.html(
-                        """
-                        <script>
-                        var inputs = window.parent.document.querySelectorAll('input[type="text"]');
-                        inputs.forEach(function(input) {
-                            if(input.placeholder && input.placeholder.includes("Ex: 08/06")) {
-                                input.setAttribute('inputmode', 'numeric');
-                                input.addEventListener('input', function(e) {
-                                    var x = e.target.value.replace(/\D/g, '').match(/(\d{0,2})(\d{0,2})(\d{0,4})/);
-                                    e.target.value = !x[2] ? x[1] : x[1] + '/' + x[2] + (x[3] ? '/' + x[3] : '');
-                                });
-                            }
-                        });
-                        </script>
-                        """,
-                        height=0,
-                    )
-                    
-                    if btn_enviar:
-                        if not conferente:
-                            st.error("⚠️ Preencha seu nome antes de enviar.")
-                        elif len(f_fab_txt) < 10 or len(f_ven_txt) < 10:
-                            st.error("⚠️ Digite as datas completas com dia, mês e ano (Ex: 08/06/2026).")
-                        else:
-                            try:
-                                # Valida se as datas digitadas são reais antes de salvar
-                                datetime.strptime(f_fab_txt, '%d/%m/%Y')
-                                datetime.strptime(f_ven_txt, '%d/%m/%Y')
-                                
-                                # Adiciona o sufixo descritivo caso seja peso variável para fins de histórico
-                                desc_final = f"{desc_item} ({qtd_pecas} pçs x {peso_medio}kg)" if tipo_unidade == "Peso Variável (Kg)" else desc_item
-                                
-                                novo_lote = pd.DataFrame([{
-                                    "ID_CARGA": id_carga_ativa,
-                                    "CODIGO": codigo_limpo,
-                                    "DESCRICAO": desc_final,
-                                    "FABRICACAO": f_fab_txt,
-                                    "VALIDADE": f_ven_txt,
-                                    "QUANTIDADE": f_qtd,
-                                    "CONFERENTE": conferente
-                                }])
-                                st.session_state.__class__.bd_global_itens = pd.concat([st.session_state.__class__.bd_global_itens, novo_lote], ignore_index=True)
-                                st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
-                                st.rerun()
-                            except ValueError:
-                                st.error("❌ Data inválida! Verifique os dias e meses digitados (Ex: não existe mês 13 ou dia 32).")
-            else:
-                st.error("❌ Código de produto não encontrado nesta carga.")
-        
-        st.markdown("---")
-        st.subheader("📋 Meus Itens Enviados")
-        if not meus_itens_carga.empty:
-            st.dataframe(meus_itens_carga[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE"]])
