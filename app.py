@@ -156,18 +156,35 @@ else:
         id_carga_ativa = str(row_c["ID_CARGA"])
         
         df_produtos_carga = pd.read_json(io.StringIO(row_c["CONTEUDO_CSV"]))
+        df_produtos_carga["Codigo_Prod"] = df_produtos_carga["Codigo_Prod"].astype(str)
+        
+        # 📊 CÁLCULO E BARRA DE PROGRESSO DA CARGA
+        meus_itens_carga = st.session_state.__class__.bd_global_itens[st.session_state.__class__.bd_global_itens["ID_CARGA"] == id_carga_ativa]
+        
+        total_produtos = len(df_produtos_carga)
+        produtos_conferidos = meus_itens_carga["CODIGO"].nunique() if not meus_itens_carga.empty else 0
+        produtos_faltantes = max(0, total_produtos - produtos_conferidos)
+        
+        percentual = (produtos_conferidos / total_produtos) if total_produtos > 0 else 0.0
+        
+        st.markdown("### 📈 Progresso da Conferência desta Carga")
+        st.progress(percentual)
+        st.caption(f"✅ **{produtos_conferidos}** conferidos | ⏳ **{produtos_faltantes}** restantes de um total de **{total_produtos}** itens.")
         
         st.markdown("---")
         conferente = st.text_input("Nome do Conferente:")
         codigo_bipado = st.text_input("Digite ou Bipe o Código do Produto:", autocomplete="off")
         
         if codigo_bipado:
-            df_produtos_carga["Codigo_Prod"] = df_produtos_carga["Codigo_Prod"].astype(str)
-            item = df_produtos_carga[df_produtos_carga["Codigo_Prod"] == codigo_bipado]
+            codigo_limpo = codigo_bipado.strip().lstrip('0')
+            item = df_produtos_carga[df_produtos_carga["Codigo_Prod"] == codigo_limpo]
             
             if not item.empty:
                 desc_item = item.iloc[0]["Descricao_Prod"]
                 st.info(f"📦 **Item:** {desc_item}")
+                
+                # Tipo de Unidade fora do formulário para atualizar a tela dinamicamente
+                tipo_unidade = st.radio("Tipo de Medida do Item:", ["Unidade (Un)", "Peso Variável (Kg)"], horizontal=True)
                 
                 with st.form(key="form_celular", clear_on_submit=True):
                     st.write("📅 **Preenchimento de Datas (Apenas números - DD/MM/AAAA)**")
@@ -178,10 +195,26 @@ else:
                     with col2:
                         f_ven_txt = st.text_input("Data de Vencimento:", max_chars=10, placeholder="Ex: 08/09/2026")
                     
-                    f_qtd = st.number_input("Quantidade:", min_value=1, step=1)
+                    # Se for Peso Variável, habilita campos de peso médio e peças
+                    if tipo_unidade == "Peso Variável (Kg)":
+                        st.write("⚖️ **Informações de Peso Variável**")
+                        col_p1, col_p2 = st.columns(2)
+                        with col_p1:
+                            peso_medio = st.number_input("Peso Médio da Peça (Kg):", min_value=0.001, step=0.001, format="%.3f")
+                        with col_p2:
+                            qtd_pecas = st.number_input("Quantidade Total de Peças:", min_value=1, step=1)
+                        
+                        # A quantidade final inserida no Excel será o peso total calculado automaticamente
+                        f_qtd = round(peso_medio * qtd_pecas, 3)
+                        st.warning(f"Calculado automaticamente peso total de: **{f_qtd} Kg**")
+                    else:
+                        f_qtd = st.number_input("Quantidade de Volumes/Unidades:", min_value=1, step=1)
+                        peso_medio = 0.0
+                        qtd_pecas = 0
+                        
                     btn_enviar = st.form_submit_button("🚀 Enviar Lote para o Supervisor")
                     
-                    # 💡 INJEÇÃO JAVASCRIPT: Força teclado numérico e coloca as barras sozinho ao digitar
+                    # 💡 INJEÇÃO JAVASCRIPT: Força teclado numérico nas datas
                     components.html(
                         """
                         <script>
@@ -211,10 +244,13 @@ else:
                                 datetime.strptime(f_fab_txt, '%d/%m/%Y')
                                 datetime.strptime(f_ven_txt, '%d/%m/%Y')
                                 
+                                # Adiciona o sufixo descritivo caso seja peso variável para fins de histórico
+                                desc_final = f"{desc_item} ({qtd_pecas} pçs x {peso_medio}kg)" if tipo_unidade == "Peso Variável (Kg)" else desc_item
+                                
                                 novo_lote = pd.DataFrame([{
                                     "ID_CARGA": id_carga_ativa,
-                                    "CODIGO": codigo_bipado,
-                                    "DESCRICAO": desc_item,
+                                    "CODIGO": codigo_limpo,
+                                    "DESCRICAO": desc_final,
                                     "FABRICACAO": f_fab_txt,
                                     "VALIDADE": f_ven_txt,
                                     "QUANTIDADE": f_qtd,
@@ -222,6 +258,7 @@ else:
                                 }])
                                 st.session_state.__class__.bd_global_itens = pd.concat([st.session_state.__class__.bd_global_itens, novo_lote], ignore_index=True)
                                 st.success("✔️ Lote enviado com sucesso para o painel do supervisor!")
+                                st.rerun()
                             except ValueError:
                                 st.error("❌ Data inválida! Verifique os dias e meses digitados (Ex: não existe mês 13 ou dia 32).")
             else:
@@ -229,6 +266,5 @@ else:
         
         st.markdown("---")
         st.subheader("📋 Meus Itens Enviados")
-        meus_itens = st.session_state.__class__.bd_global_itens[st.session_state.__class__.bd_global_itens["ID_CARGA"] == id_carga_ativa]
-        if not meus_itens.empty:
-            st.dataframe(meus_itens[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE"]])
+        if not meus_itens_carga.empty:
+            st.dataframe(meus_itens_carga[["CODIGO", "DESCRICAO", "FABRICACAO", "VALIDADE", "QUANTIDADE"]])
